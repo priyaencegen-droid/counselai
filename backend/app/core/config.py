@@ -21,11 +21,11 @@ class Settings(BaseSettings):
     cloud_api_key: str = ""
     cloud_base_url: str = "https://api.openai.com/v1"
     cloud_model: str = "gpt-4o-mini"
-    chunk_size: int = 7000
-    chunk_overlap: int = 500
+    chunk_size: int = 20000
+    chunk_overlap: int = 1000
     map_batch_size: int = 4
-    max_context_chars_per_batch: int = 7000
-    max_reduce_chars_per_batch: int = 45000
+    max_context_chars_per_batch: int = 60000
+    max_reduce_chars_per_batch: int = 80000
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

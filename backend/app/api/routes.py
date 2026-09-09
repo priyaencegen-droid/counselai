@@ -95,6 +95,7 @@ async def analyze(payload: AnalyzeRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "No documents are attached to this job")
     job.status = "queued"
     job.progress = 10
+    job.error = None
     job.current_step = "Queued for analysis"
     await db.commit()
     asyncio.create_task(run_analysis(payload.job_id, payload.title))
