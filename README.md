@@ -1,6 +1,6 @@
 # CounselAI — Legal Document Analysis Dashboard
 
-CounselAI is a full-stack, AI-powered legal document review and analysis platform built with **FastAPI**, **SQLite**, **React**, and **Tailwind CSS**. It supports batch processing of legal documents (PDF, DOCX, TXT) using **Ollama** (local/cloud) or **OpenAI-compatible** LLM providers (e.g., OpenAI, Groq).
+CounselAI is a full-stack, AI-powered legal document review and analysis platform built with **FastAPI**, **SQLite**, **React**, and **Tailwind CSS**. It supports batch processing of legal documents (PDF, DOCX, TXT, XLS, XLSX) using **Ollama** (local/cloud) or **OpenAI-compatible** LLM providers (e.g., OpenAI, Groq).
 
 ---
 
@@ -24,7 +24,7 @@ CounselAI is a full-stack, AI-powered legal document review and analysis platfor
 
 ## 🚀 Features
 
-- **Bulk Document Upload**: Process multiple PDF, DOCX, and TXT files with batch-size validation.
+- **Bulk Document Upload**: Process multiple PDF, DOCX, TXT, XLS, and XLSX files with batch-size validation.
 - **Smart Text Extraction & Chunking**: Configurable chunk sizes and overlaps with metadata preservation.
 - **Map-Reduce LLM Analysis**: High-capacity document summarization and risk analysis capable of processing large document sets.
 - **Flexible LLM Providers**: Support for local Ollama instances, Ollama Cloud, or OpenAI-compatible APIs (OpenAI, Groq, etc.).
@@ -51,7 +51,7 @@ The following diagram and step-by-step breakdown illustrate how data flows throu
 ```mermaid
 flowchart TD
     subgraph UI ["Frontend (React + Tailwind)"]
-        A[User Uploads Documents<br/>PDF, DOCX, TXT] --> B[File Validation<br/>Size, count & extensions]
+        A[User Uploads Documents<br/>PDF, DOCX, TXT, XLS, XLSX] --> B[File Validation<br/>Size, count & extensions]
         B --> C[POST /api/upload]
         D[Start Analysis Button] --> E[POST /api/analyze]
         F[Live Job Polling<br/>GET /api/jobs/{id}] <--> G[Progress Tracker & Status]
@@ -82,7 +82,7 @@ flowchart TD
 ### End-to-End Workflow Breakdown
 
 1. **Document Ingestion (`Frontend -> Backend`)**:
-   - User drags and drops or selects up to 100 legal documents (PDF, DOCX, TXT).
+  - User drags and drops or selects up to 100 legal documents (PDF, DOCX, TXT, XLS, XLSX).
    - Frontend validates batch size and constraints, then uploads files via `POST /api/upload`.
    - Files are stored asynchronously on disk (`./storage/{job_id}`) and metadata is tracked in SQLite.
 
@@ -292,10 +292,10 @@ counselai/
     ├── package.json        # Frontend dependencies and scripts
     ├── .env.example        # Frontend environment sample
     ├── src/
-    │   ├── App.tsx         # Root component
+    │   ├── main.tsx        # Frontend entry point
     │   ├── pages/          # Dashboard and report views
     │   ├── components/     # UI components (Upload, History, Viewer, etc.)
-    │   └── services/       # API client & HTTP helpers
+    │   └── lib/            # API client & HTTP helpers
     └── index.html          # HTML entry point
 ```
 
