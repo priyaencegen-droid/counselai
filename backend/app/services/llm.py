@@ -26,75 +26,56 @@ async def post_json(url: str, payload: dict, headers: dict | None = None, timeou
         return response.json()
 
 async def generate(prompt: str, model: str | None = None) -> str:
+    """Call Ollama Cloud API at https://ollama.com/api/chat."""
     settings = get_settings()
-    provider = settings.llm_provider.lower().strip()
+    base_url = settings.ollama_base_url.strip().rstrip("/")
+    primary_model = settings.ollama_model.strip()
+    requested_model = (model or primary_model).strip()
+    api_key = settings.ollama_api_key.strip()
 
-    if provider == "ollama":
-        base_url = settings.ollama_base_url.strip().rstrip("/")
-        primary_model = settings.ollama_model.strip()
-        requested_model = (model or primary_model).strip()
-        api_key = settings.ollama_api_key.strip()
+    if not requested_model:
+        raise RuntimeError("OLLAMA_MODEL is empty in configuration")
+    if not api_key:
+        raise RuntimeError("OLLAMA_API_KEY is required for Ollama Cloud")
 
-        if not primary_model and not requested_model:
-            raise RuntimeError("OLLAMA_MODEL is empty in configuration")
+    api_url = f"{base_url}/api/chat"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    payload = {
+        "model": requested_model,
+        "messages": [
+            {"role": "system", "content": get_system_prompt()},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.1},
+    }
 
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
-        if not api_key and base_url.startswith("https://ollama.com"):
-            raise RuntimeError("OLLAMA_API_KEY is required when using Ollama Cloud (https://ollama.com)")
-
-        payload = {
-            "model": requested_model,
-            "messages": [
-                {"role": "system", "content": get_system_prompt()},
-                {"role": "user", "content": prompt},
-            ],
-            "stream": False,
-            "options": {"temperature": 0.1},
-        }
-
-        try:
-            data = await post_json(f"{base_url}/api/chat", payload, headers)
+    try:
+        logger.info("Calling Ollama Cloud model '%s' at %s", requested_model, api_url)
+        data = await post_json(api_url, payload, headers)
+        content = data.get("message", {}).get("content", "").strip()
+        if not content:
+            raise RuntimeError(f"Ollama Cloud model '{requested_model}' returned an empty response. Raw: {str(data)[:300]}")
+        logger.info("Ollama Cloud model '%s' responded successfully (%d chars)", requested_model, len(content))
+        return clean_llm_response(content)
+    except Exception as exc:
+        logger.error("Ollama Cloud call failed for model '%s': %s", requested_model, exc)
+        # If a secondary model (e.g. map model) failed, fallback to primary model
+        if model and model != primary_model and primary_model:
+            is_rate_limit = "429" in str(exc) or "too many concurrent" in str(exc).lower()
+            sleep_secs = 5.0 if is_rate_limit else 1.0
+            logger.warning("Model '%s' failed (%s). Waiting %ds then retrying with primary model '%s'...", model, exc, sleep_secs, primary_model)
+            await asyncio.sleep(sleep_secs)
+            payload["model"] = primary_model
+            data = await post_json(api_url, payload, headers)
             content = data.get("message", {}).get("content", "").strip()
             if not content:
-                raise RuntimeError(f"Ollama model '{requested_model}' returned an empty response")
+                raise RuntimeError(f"Ollama Cloud primary model '{primary_model}' returned an empty response")
             return clean_llm_response(content)
-        except Exception as exc:
-            # If a secondary model (e.g. map model) failed, fallback to primary model
-            if model and model != primary_model and primary_model:
-                logger.warning("Requested model '%s' failed (%s). Retrying with primary model '%s'...", model, exc, primary_model)
-                payload["model"] = primary_model
-                data = await post_json(f"{base_url}/api/chat", payload, headers)
-                content = data.get("message", {}).get("content", "").strip()
-                if not content:
-                    raise RuntimeError(f"Ollama primary model '{primary_model}' returned an empty response")
-                return clean_llm_response(content)
-            raise
+        raise
 
-    if provider == "cloud":
-        if not settings.cloud_api_key:
-            raise RuntimeError("CLOUD_API_KEY is required when LLM_PROVIDER=cloud")
-        headers = {"Authorization": f"Bearer {settings.cloud_api_key}"}
-        payload = {
-            "model": settings.cloud_model,
-            "messages": [
-                {"role": "system", "content": get_system_prompt()},
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.1,
-        }
-        data = await post_json(
-            f"{settings.cloud_base_url.rstrip('/')}/chat/completions",
-            payload,
-            headers,
-        )
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        if not content:
-            raise RuntimeError("Cloud LLM returned an empty response")
-        return clean_llm_response(content)
-
-    raise RuntimeError(f"Unsupported LLM_PROVIDER: {settings.llm_provider}")
-
-async def generate_with_retry(prompt: str, model: str | None = None, max_attempts: int = 3) -> str:
+async def generate_with_retry(prompt: str, model: str | None = None, max_attempts: int = 6) -> str:
+    """Retry LLM calls with progressive backoff. Defaults to 6 attempts for rate-limited providers."""
     last_error = None
     for attempt in range(max_attempts):
         try:
@@ -103,20 +84,26 @@ async def generate_with_retry(prompt: str, model: str | None = None, max_attempt
             last_error = exc
             if attempt == max_attempts - 1:
                 raise RuntimeError(f"LLM request timed out after {max_attempts} attempts: {exc}") from exc
-            await asyncio.sleep(2 ** attempt)
+            sleep_time = min(2 ** attempt, 30)  # cap at 30s
+            logger.info("LLM timeout on attempt %d/%d. Retrying in %ds...", attempt + 1, max_attempts, sleep_time)
+            await asyncio.sleep(sleep_time)
         except Exception as exc:
-            # If error is non-retryable 4xx (except timeout), raise immediately
+            # Non-retryable auth/notfound errors — raise immediately
             last_error = exc
-            if "404" in str(exc) or "401" in str(exc) or "403" in str(exc):
+            is_rate_limit = "429" in str(exc) or "too many concurrent" in str(exc).lower()
+            if not is_rate_limit and ("404" in str(exc) or "401" in str(exc) or "403" in str(exc)):
                 raise
             if attempt == max_attempts - 1:
                 raise
-            await asyncio.sleep(2 ** attempt)
-    raise RuntimeError(f"LLM generation failed: {last_error}")
+            # Progressive backoff: 5s, 10s, 15s, 20s, 25s for rate limits; exponential for others
+            sleep_time = (5 * (attempt + 1)) if is_rate_limit else min(2 ** attempt, 30)
+            logger.info("LLM attempt %d/%d failed (%s). Retrying in %ds...", attempt + 1, max_attempts, exc, sleep_time)
+            await asyncio.sleep(sleep_time)
+    raise RuntimeError(f"LLM generation failed after {max_attempts} attempts: {last_error}")
 
 async def generate_map_memo(batch_no: int, source: str) -> str:
     settings = get_settings()
-    map_model = settings.ollama_map_model.strip() if settings.llm_provider.lower() == "ollama" and settings.ollama_map_model else None
+    map_model = settings.ollama_map_model.strip() if settings.ollama_map_model else None
     prompt = f"""Prepare evidence memo batch {batch_no} from these source documents.
 Extract parties, dates, identifiers, obligations, rights, representations, conditions, liabilities,
 property/title signals, missing evidence and contradictions. Preserve exact values and cite each finding.
@@ -181,18 +168,19 @@ EVIDENCE:
     return await generate_with_retry(report_prompt)
 
 async def embed(text: str) -> list[float] | None:
+    """Generate embeddings via Ollama Cloud."""
     settings = get_settings()
     if not settings.enable_embeddings:
         return None
-    if settings.llm_provider.lower() != "ollama":
-        return None
     base_url = settings.ollama_base_url.strip().rstrip("/")
     api_key = settings.ollama_api_key.strip()
+    if not api_key:
+        return None
     try:
         data = await post_json(
             f"{base_url}/api/embed",
             {"model": settings.ollama_embed_model.strip(), "input": text},
-            {"Authorization": f"Bearer {api_key}"} if api_key else None,
+            {"Authorization": f"Bearer {api_key}"},
             timeout_seconds=30.0,
         )
         embeddings = data.get("embeddings")
@@ -201,4 +189,3 @@ async def embed(text: str) -> list[float] | None:
     except Exception as exc:
         logger.warning("Embedding generation failed: %s. Continuing without embedding vector.", exc)
     return None
-

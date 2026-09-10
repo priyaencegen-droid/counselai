@@ -27,6 +27,9 @@ export default function Dashboard() {
     getReports().then(setReports).catch(() => {})
   }, [])
 
+  // Poll for job status whenever it's actively running.
+  // Key on both job.id AND job.status so that clicking Retry (same id, status
+  // transitions from 'failed' -> 'queued') correctly restarts the interval.
   useEffect(() => {
     if (!job || !['queued', 'processing'].includes(job.status)) return
     const timer = window.setInterval(() => {
@@ -39,7 +42,7 @@ export default function Dashboard() {
           }
         })
         .catch(e => setError(e.message))
-    }, 1000)
+    }, 1500)
     return () => window.clearInterval(timer)
   }, [job?.id, job?.status])
 
@@ -87,6 +90,9 @@ export default function Dashboard() {
     try {
       setBusy(true)
       setError('')
+      // Optimistically mark as queued so the polling useEffect re-triggers
+      // immediately (even though job.id hasn't changed)
+      setJob(prev => prev ? { ...prev, status: 'queued', progress: 10, processed_files: 0, current_step: 'Queued for analysis', error: null } : prev)
       const updated = await startAnalysis(job.id, title)
       setJob(updated)
     } catch (e: any) {
@@ -246,7 +252,13 @@ export default function Dashboard() {
               </div>
 
               <Progress
-                label={job.total_files > 0 ? `${job.processed_files}/${job.total_files} files parsed` : 'Processing'}
+                label={
+                  job.progress > 55
+                    ? job.current_step || 'LLM analysis in progress'
+                    : job.total_files > 0
+                      ? `${job.processed_files}/${job.total_files} files parsed`
+                      : 'Processing'
+                }
                 value={job.progress}
               />
 

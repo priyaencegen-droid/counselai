@@ -95,6 +95,7 @@ async def analyze(payload: AnalyzeRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(400, "No documents are attached to this job")
     job.status = "queued"
     job.progress = 10
+    job.processed_files = 0  # Reset so UI doesn't show stale counts from a previous run
     job.error = None
     job.current_step = "Queued for analysis"
     await db.commit()
